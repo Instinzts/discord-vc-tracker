@@ -1,0 +1,40 @@
+# Source files
+src/
+*.ts
+!dist/**/*.ts
+
+# Tests
+tests/
+*.test.ts
+*.test.js
+coverage/
+
+# Config files
+tsconfig.json
+jest.config.js
+.eslintrc.json
+.prettierrc
+
+# Examples (optional - remove if you want to include them)
+examples/
+
+# Environment
+.env
+.env.*
+
+# Data
+data/
+*.json
+!package.json
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Build files
+*.log
+npm-debug.log*

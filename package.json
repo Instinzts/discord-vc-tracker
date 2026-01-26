@@ -1,0 +1,77 @@
+{
+  "name": "discord-vc-tracker",
+  "version": "1.0.0",
+  "description": "Modern voice activity tracking for Discord bots with XP, leveling, and comprehensive statistics",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "readme.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts --max-warnings=100",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "prepublishOnly": "npm run build",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "discord",
+    "discord.js",
+    "voice",
+    "voice-tracking",
+    "voice-time",
+    "tracking",
+    "bot",
+    "discord-bot",
+    "leveling",
+    "xp",
+    "leaderboard",
+    "statistics",
+    "analytics",
+    "voice-chat",
+    "mongodb",
+    "typescript"
+  ],
+  "author": "Async",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Instinzts/discord-vc-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Instinzts/discord-vc-tracker/issues"
+  },
+  "homepage": "https://github.com/Instinzts/discord-vc-tracker#readme",
+  "peerDependencies": {
+    "discord.js": "^14.0.0"
+  },
+  "optionalDependencies": {
+    "mongodb": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.0.10",
+    "@types/serialize-javascript": "^5.0.4",
+    "@typescript-eslint/eslint-plugin": "^8.53.1",
+    "@typescript-eslint/parser": "^8.53.1",
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.39.2",
+    "globals": "^17.1.0",
+    "jest": "^30.2.0",
+    "mongodb": "^7.0.0",
+    "prettier": "^3.8.1",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
