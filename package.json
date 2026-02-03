@@ -1,6 +1,6 @@
 {
   "name": "discord-vc-tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Modern voice activity tracking for Discord bots with XP, leveling, and comprehensive statistics",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -50,12 +50,15 @@
   },
   "homepage": "https://github.com/Instinzts/discord-vc-tracker#readme",
   "peerDependencies": {
-    "discord.js": "^14.0.0"
+    "discord.js": "^14.0.0",
+    "redis": "^5.10.0"
   },
   "optionalDependencies": {
+    "better-sqlite3": "^12.6.2",
     "mongodb": "^7.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.0.10",
     "@types/serialize-javascript": "^5.0.4",

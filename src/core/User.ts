@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { Collection } from 'discord.js';
 import { VoiceManager } from './VoiceManager';
@@ -70,17 +71,60 @@ export class User extends EventEmitter {
     };
   }
 
+  // /**
+  //  * Add voice time to user
+  //  */
+  // async addVoiceTime(amount: number, channelId?: string): Promise<void> {
+  //   this.totalVoiceTime += amount;
+    
+  //   // Update channel-specific time if provided
+  //   if (channelId) {
+  //     let channel = this.channels.get(channelId);
+      
+  //     if (!channel) {
+  //       const channelData: ChannelData = {
+  //         channelId,
+  //         voiceTime: amount,
+  //         sessions: 1,
+  //         lastActivity: new Date(),
+  //       };
+  //       channel = new Channel(this.manager, this.guild, this, channelData);
+  //       this.channels.set(channelId, channel);
+  //     } else {
+  //       await channel.addTime(amount);
+  //     }
+  //   }
+    
+  //   this.lastSeen = new Date();
+  //   await this.save();
+
+  //   // ✅ WRITE-THROUGH: Update cache with fresh data
+  //   if (this.manager.cache) {
+  //     await this.manager.cache.setUser(this.data);
+  //   }
+    
+  //   this.emit('voiceTimeAdd', this, amount);
+  //   this.manager.emit('voiceTimeGained', this, amount);
+  // }
+
   /**
    * Add voice time to user
+   * 
+   * ✅ OPTIMIZED v1.1.0: Prevents duplicate saves when updating existing channels
+   * - New channel: saves once
+   * - Existing channel: channel.addTime() handles save + cache
+   * - No channel: saves once
    */
   async addVoiceTime(amount: number, channelId?: string): Promise<void> {
     this.totalVoiceTime += amount;
+    this.lastSeen = new Date();
     
     // Update channel-specific time if provided
     if (channelId) {
       let channel = this.channels.get(channelId);
       
       if (!channel) {
+        // NEW CHANNEL: Create and save once
         const channelData: ChannelData = {
           channelId,
           voiceTime: amount,
@@ -89,17 +133,33 @@ export class User extends EventEmitter {
         };
         channel = new Channel(this.manager, this.guild, this, channelData);
         this.channels.set(channelId, channel);
+        
+        // Save and cache for new channel
+        await this.save();
+        if (this.manager.cache) {
+          await this.manager.cache.setUser(this.data);
+        }
       } else {
+        // EXISTING CHANNEL: Let channel.addTime() handle save + cache
         await channel.addTime(amount);
+        
+        // Early return - no duplicate save needed!
+        this.emit('voiceTimeAdd', this, amount);
+        this.manager.emit('voiceTimeGained', this, amount);
+        return;
+      }
+    } else {
+      // NO CHANNEL: Save normally
+      await this.save();
+      if (this.manager.cache) {
+        await this.manager.cache.setUser(this.data);
       }
     }
-    
-    this.lastSeen = new Date();
-    await this.save();
     
     this.emit('voiceTimeAdd', this, amount);
     this.manager.emit('voiceTimeGained', this, amount);
   }
+
 
   /**
    * Add XP and check for level up
@@ -124,6 +184,13 @@ export class User extends EventEmitter {
     this.lastSeen = new Date();
     await this.save();
     
+
+    // ✅ WRITE-THROUGH: Update cache with fresh data
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.data);
+    }
+  
+
     this.emit('xpAdd', this, amount);
     this.manager.emit('xpGained', this, amount);
     
@@ -138,6 +205,11 @@ export class User extends EventEmitter {
     this.level = level;
     
     await this.save();
+
+    // ✅ WRITE-THROUGH: Update cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.data);
+    }
     
     this.emit('levelSet', this, oldLevel, level);
   }
@@ -153,6 +225,11 @@ export class User extends EventEmitter {
     this.level = Math.floor(multiplier * Math.sqrt(this.xp));
     
     await this.save();
+
+    // ✅ WRITE-THROUGH: Update cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.data);
+    }
   }
 
   /**
@@ -167,7 +244,12 @@ export class User extends EventEmitter {
     this.streak = 0;
     
     await this.save();
-    
+
+    // ✅ WRITE-THROUGH: Update cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.data);
+    }
+
     this.emit('userReset', this);
   }
 
@@ -177,6 +259,11 @@ export class User extends EventEmitter {
   async editMetadata(metadata: Record<string, any>): Promise<void> {
     this.metadata = { ...this.metadata, ...metadata };
     await this.save();
+
+    // ✅ WRITE-THROUGH: Update cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.data);
+    }
   }
 
   /**

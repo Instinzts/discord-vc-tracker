@@ -1,5 +1,6 @@
 import { GuildMember, VoiceBasedChannel, PermissionResolvable } from 'discord.js';
 
+
 /**
  * Configuration options for the VoiceManager
  */
@@ -7,6 +8,9 @@ export interface VoiceManagerOptions {
   /** Storage adapter to use */
   storage: StorageAdapter;
   
+  /** Cache Manager (Optional) */
+  cache?: CacheAdapter;
+
   /** Check interval in milliseconds (default: 5000) */
   checkInterval?: number;
   
@@ -15,6 +19,22 @@ export interface VoiceManagerOptions {
   
   /** Default configuration for new guilds */
   defaultConfig?: Partial<GuildConfig>;
+}
+
+
+/** 
+ *  Cache Configuration
+ */
+
+export interface CacheConfig {
+  /** Cache TTL in milliseconds (default: 300000 = 5 minutes) */
+  ttl?: number;
+
+  /** Cache size limit (default: 1000) */
+  maxSize?: number;
+  
+  /** Enable caching statistics */
+  enableStats?: boolean;
 }
 
 /**
@@ -330,6 +350,54 @@ export interface StorageAdapter {
   close(): Promise<void>;
 }
 
+
+/**
+ * Cache adapter interface
+ */
+export interface CacheAdapter {
+  /** Initialize cache */
+  init(): Promise<void>;
+  
+  /** Get cached value */
+  get<T>(key: string): Promise<T | null>;
+  
+  /** Set cached value */
+  set<T>(key: string, value: T, ttl?: number): Promise<void>;
+  
+  /** Delete cached value */
+  delete(key: string): Promise<void>;
+  
+  /** Clear all cache */
+  clear(): Promise<void>;
+  
+  /** Check if key exists */
+  has(key: string): Promise<boolean>;
+  
+  /** Get multiple values */
+  mget<T>(keys: string[]): Promise<(T | null)[]>;
+  
+  /** Set multiple values */
+  mset<T>(entries: Array<[string, T]>, ttl?: number): Promise<void>;
+  
+  /** Get cache statistics */
+  getStats?(): Promise<CacheStats>;
+  
+  /** Close cache connection */
+  close(): Promise<void>;
+}
+
+/**
+ * Cache statistics
+ */
+export interface CacheStats {
+  hits: number;
+  misses: number;
+  sets: number;
+  deletes: number;
+  size: number;
+  hitRate: number;
+}
+
 /**
  * Event types
  */
@@ -352,6 +420,12 @@ export interface VoiceEvents {
   /** Guild configuration updated */
   configUpdated: (guildId: string, config: GuildConfig) => void;
   
+  /** Cache hit */
+  cacheHit: (key: string) => void;
+
+  /** Cache miss */
+  cacheMiss: (key: string) => void;
+
   /** Error occurred */
   error: (error: Error) => void;
   

@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { VoiceManager, MongoStorage, XPCalculator } = require('discord-vc-tracker');
+const { VoiceManager, MongoStorage, RedisCache, XPCalculator } = require('discord-vc-tracker');
 const mongoose = require('mongoose');
 
 // ========================
@@ -18,6 +18,9 @@ const GuildSettingsSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Add indexes for better query performance
+GuildSettingsSchema.index({ guildId: 1 });
+
 const GuildSettings = mongoose.model('GuildSettings', GuildSettingsSchema);
 
 // ========================
@@ -33,23 +36,32 @@ const client = new Client({
 });
 
 // ========================
-// STORAGE SETUP
+// STORAGE & CACHE SETUP
 // ========================
 
 const storage = new MongoStorage(
   process.env.MONGODB_URI,
-  'voicetracker'  // Separate database for voice data
+  'voicetracker'  // Separate database for voice tracking data
 );
+
+// ✅ CREATE REDIS CACHE (Recommended for production & multi-instance)
+const cache = new RedisCache({
+  url: process.env.REDIS_URL || 'redis://localhost:6379',  // Redis connection URL
+  ttl: 300000,      // 5 minutes cache lifetime
+  keyPrefix: 'voice:',  // Namespace for keys
+  enableStats: true // Track cache performance
+});
 
 const calculator = new XPCalculator();
 
 // ========================
-// VOICE MANAGER SETUP
+// VOICE MANAGER WITH REDIS CACHE
 // ========================
 
 const voiceManager = new VoiceManager(client, {
   storage,
-  checkInterval: 5000,
+  cache,  // ✅ Enable Redis caching for persistence & multi-instance support
+  checkInterval: 10000,
   debug: true,
   
   defaultConfig: {
@@ -58,7 +70,7 @@ const voiceManager = new VoiceManager(client, {
     trackMuted: true,
     trackDeafened: true,
     
-    xpStrategy: 'guild-settings-xp',  // Custom strategy
+    xpStrategy: 'guild-settings-xp',  // Custom strategy using your schema
     voiceTimeStrategy: 'fixed',
     levelMultiplierStrategy: 'standard',
     
@@ -81,6 +93,7 @@ const voiceManager = new VoiceManager(client, {
 // XP Strategy using your custom Mongoose schema
 voiceManager.registerXPStrategy('guild-settings-xp', async (member, config) => {
   try {
+    // Query YOUR custom database
     const settings = await GuildSettings.findOne({ guildId: member.guild.id });
     
     if (!settings) {
@@ -156,16 +169,49 @@ voiceManager.on('xpGained', (user, amount) => {
   console.log(`💫 ${user.userId} gained ${amount} XP`);
 });
 
+// ✅ LISTEN FOR REDIS CACHE EVENTS
+voiceManager.on('debug', (message) => {
+  // Only show cache-related messages
+  if (message.includes('Cache') || message.includes('Redis')) {
+    console.log(`🗄️  ${message}`);
+  }
+});
+
 voiceManager.on('error', (error) => {
   console.error('❌ VoiceManager error:', error);
 });
+
+// ========================
+// REDIS CACHE STATISTICS MONITORING
+// ========================
+
+let cacheStatsInterval;
+
+function startCacheMonitoring() {
+  cacheStatsInterval = setInterval(async () => {
+    const stats = await voiceManager.cache.getStats();
+    console.log('\n📊 ===== REDIS CACHE STATISTICS =====');
+    console.log(`   Hit Rate:    ${(stats.hitRate * 100).toFixed(2)}%`);
+    console.log(`   Hits:        ${stats.hits}`);
+    console.log(`   Misses:      ${stats.misses}`);
+    console.log(`   Cache Size:  ${stats.size} items`);
+    console.log(`   Sets:        ${stats.sets}`);
+    console.log(`   Deletes:     ${stats.deletes}`);
+    console.log('=====================================\n');
+    
+    // Alert on low hit rate
+    if (stats.hitRate < 0.6 && stats.hits + stats.misses > 100) {
+      console.warn('⚠️  Low cache hit rate detected! Consider increasing TTL or checking cache configuration.');
+    }
+  }, 60000); // Every 60 seconds
+}
 
 // ========================
 // SLASH COMMANDS
 // ========================
 
 const commands = [
-  // /stats command
+  // User commands
   new SlashCommandBuilder()
     .setName('stats')
     .setDescription('View voice activity statistics')
@@ -173,7 +219,21 @@ const commands = [
       option.setName('user').setDescription('User to check').setRequired(false)
     ),
   
-  // /setviprole command
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('View the voice activity leaderboard')
+    .addStringOption(option =>
+      option
+        .setName('type')
+        .setDescription('Sort by')
+        .addChoices(
+          { name: 'XP', value: 'xp' },
+          { name: 'Level', value: 'level' },
+          { name: 'Voice Time', value: 'voiceTime' }
+        )
+    ),
+  
+  // Admin commands - Guild Settings
   new SlashCommandBuilder()
     .setName('setviprole')
     .setDescription('Set VIP role for bonus XP (Admin only)')
@@ -181,7 +241,6 @@ const commands = [
       option.setName('role').setDescription('VIP role').setRequired(true)
     ),
   
-  // /setboosterrole command
   new SlashCommandBuilder()
     .setName('setboosterrole')
     .setDescription('Set booster role for bonus XP (Admin only)')
@@ -189,7 +248,6 @@ const commands = [
       option.setName('role').setDescription('Booster role').setRequired(true)
     ),
   
-  // /setmultiplier command
   new SlashCommandBuilder()
     .setName('setmultiplier')
     .setDescription('Set XP multiplier for this server (Admin only)')
@@ -202,7 +260,6 @@ const commands = [
         .setMaxValue(10)
     ),
   
-  // /addbonuschannel command
   new SlashCommandBuilder()
     .setName('addbonuschannel')
     .setDescription('Add a bonus XP channel (Admin only)')
@@ -213,7 +270,6 @@ const commands = [
         .setRequired(true)
     ),
   
-  // /setlevelmessage command
   new SlashCommandBuilder()
     .setName('setlevelmessage')
     .setDescription('Set custom level up message (Admin only)')
@@ -224,10 +280,18 @@ const commands = [
         .setRequired(true)
     ),
   
-  // /serverconfig command
   new SlashCommandBuilder()
     .setName('serverconfig')
     .setDescription('View server voice tracking configuration (Admin only)'),
+  
+  // Redis cache management command
+  new SlashCommandBuilder()
+    .setName('cachestats')
+    .setDescription('View Redis cache performance statistics'),
+  
+  new SlashCommandBuilder()
+    .setName('clearcache')
+    .setDescription('Clear Redis cache (Admin only)'),
 ];
 
 // ========================
@@ -241,6 +305,9 @@ client.on('interactionCreate', async (interaction) => {
     switch (interaction.commandName) {
       case 'stats':
         await handleStatsCommand(interaction);
+        break;
+      case 'leaderboard':
+        await handleLeaderboardCommand(interaction);
         break;
       case 'setviprole':
         await handleSetVipRoleCommand(interaction);
@@ -260,6 +327,12 @@ client.on('interactionCreate', async (interaction) => {
       case 'serverconfig':
         await handleServerConfigCommand(interaction);
         break;
+      case 'cachestats':
+        await handleCacheStatsCommand(interaction);
+        break;
+      case 'clearcache':
+        await handleClearCacheCommand(interaction);
+        break;
     }
   } catch (error) {
     console.error('Command error:', error);
@@ -277,47 +350,242 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ========================
-// /stats COMMAND
+// /stats COMMAND (CACHE-AWARE)
 // ========================
 
 async function handleStatsCommand(interaction) {
   const targetUser = interaction.options.getUser('user') || interaction.user;
   
-  const guild = voiceManager.guilds.get(interaction.guildId);
-  const user = guild?.users.get(targetUser.id);
+  // ✅ CACHE-AWARE: Uses Redis cache for ultra-fast response
+  const userData = await voiceManager.getUser(interaction.guildId, targetUser.id);
   
-  if (!user) {
+  if (!userData) {
     return interaction.reply({
       content: `${targetUser.username} has no voice activity yet!`,
       ephemeral: true,
     });
   }
   
+  // Get guild for config
+  const guild = voiceManager.guilds.get(interaction.guildId);
   const multiplier = await guild.config.getLevelMultiplier();
-  const progress = calculator.calculateLevelProgress(user.xp, multiplier);
-  const xpToNext = calculator.calculateXPToNextLevel(user.xp, multiplier);
-  const rank = await user.getRank('xp');
+  const progress = calculator.calculateLevelProgress(userData.xp, multiplier);
+  const xpToNext = calculator.calculateXPToNextLevel(userData.xp, multiplier);
+  
+  // Calculate rank from cached leaderboard
+  const leaderboard = await voiceManager.getLeaderboard(interaction.guildId, {
+    sortBy: 'xp',
+    limit: 1000,
+  });
+  const userEntry = leaderboard.find(entry => entry.userId === targetUser.id);
+  const rank = userEntry?.rank || null;
   
   const embed = new EmbedBuilder()
     .setColor('#5865F2')
     .setTitle(`📊 Voice Stats for ${targetUser.username}`)
     .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
     .addFields(
-      { name: '⏱️ Voice Time', value: calculator.formatVoiceTime(user.totalVoiceTime), inline: true },
-      { name: '⭐ Level', value: `${user.level}`, inline: true },
-      { name: '💫 XP', value: `${user.xp.toLocaleString()}`, inline: true },
-      { name: '📈 Progress', value: `${progress}% → Level ${user.level + 1}`, inline: true },
+      { 
+        name: '⏱️ Voice Time', 
+        value: calculator.formatVoiceTime(userData.totalVoiceTime), 
+        inline: true 
+      },
+      { name: '⭐ Level', value: `${userData.level}`, inline: true },
+      { name: '💫 XP', value: `${userData.xp.toLocaleString()}`, inline: true },
+      { 
+        name: '📈 Progress', 
+        value: `${progress}% → Level ${userData.level + 1}`, 
+        inline: true 
+      },
       { name: '🎯 XP Needed', value: `${xpToNext.toLocaleString()}`, inline: true },
       { name: '🏆 Rank', value: rank ? `#${rank}` : 'Unranked', inline: true }
     )
-    .setFooter({ text: 'Powered by discord-vc-tracker with MongoDB' })
+    .setFooter({ text: 'Powered by Redis Cache ⚡' })
     .setTimestamp();
   
   await interaction.reply({ embeds: [embed] });
 }
 
 // ========================
-// /setviprole COMMAND
+// /leaderboard COMMAND (CACHE-AWARE)
+// ========================
+
+async function handleLeaderboardCommand(interaction) {
+  const type = interaction.options.getString('type') || 'xp';
+  
+  // ✅ CACHE-AWARE: Uses Redis cache for instant leaderboard
+  const leaderboard = await voiceManager.getLeaderboard(interaction.guildId, {
+    sortBy: type,
+    limit: 10
+  });
+  
+  if (leaderboard.length === 0) {
+    return interaction.reply({
+      content: 'No leaderboard data available yet!',
+      ephemeral: true
+    });
+  }
+  
+  const description = await Promise.all(
+    leaderboard.map(async (entry, index) => {
+      const member = await interaction.guild.members.fetch(entry.userId).catch(() => null);
+      const username = member ? member.user.username : 'Unknown User';
+      
+      let value;
+      if (type === 'voiceTime') {
+        value = calculator.formatVoiceTime(entry.voiceTime || entry.totalVoiceTime);
+      } else if (type === 'level') {
+        value = `Level ${entry.level}`;
+      } else {
+        value = `${entry.xp.toLocaleString()} XP`;
+      }
+      
+      const medal = ['🥇', '🥈', '🥉'][index] || `**${index + 1}.**`;
+      return `${medal} ${username} - ${value}`;
+    })
+  );
+  
+  const embed = new EmbedBuilder()
+    .setColor('#FFD700')
+    .setTitle(`🏆 ${type.toUpperCase()} Leaderboard`)
+    .setDescription(description.join('\n'))
+    .setFooter({ text: 'Data cached in Redis for optimal performance ⚡' })
+    .setTimestamp();
+  
+  await interaction.reply({ embeds: [embed] });
+}
+
+// ========================
+// /cachestats COMMAND
+// ========================
+
+async function handleCacheStatsCommand(interaction) {
+  const stats = await voiceManager.cache.getStats();
+  
+  // Calculate performance metrics
+  const totalRequests = stats.hits + stats.misses;
+  const avgResponseTime = stats.hits > 0 
+    ? `~${Math.round(5 * (stats.misses / totalRequests))}ms` 
+    : 'N/A';
+  
+  // Calculate memory usage estimate
+  const estimatedMemoryKB = Math.round(stats.size * 0.5); // Rough estimate: 0.5KB per item
+  
+  const embed = new EmbedBuilder()
+    .setColor('#00FF00')
+    .setTitle('📊 Redis Cache Performance')
+    .setDescription('Real-time cache performance metrics')
+    .addFields(
+      { 
+        name: '🎯 Hit Rate', 
+        value: `${(stats.hitRate * 100).toFixed(2)}%`, 
+        inline: true 
+      },
+      { 
+        name: '✅ Cache Hits', 
+        value: `${stats.hits.toLocaleString()}`, 
+        inline: true 
+      },
+      { 
+        name: '❌ Cache Misses', 
+        value: `${stats.misses.toLocaleString()}`, 
+        inline: true 
+      },
+      { 
+        name: '📦 Cache Size', 
+        value: `${stats.size} items (~${estimatedMemoryKB}KB)`, 
+        inline: true 
+      },
+      { 
+        name: '➕ Sets', 
+        value: `${stats.sets.toLocaleString()}`, 
+        inline: true 
+      },
+      { 
+        name: '➖ Deletes', 
+        value: `${stats.deletes.toLocaleString()}`, 
+        inline: true 
+      },
+      {
+        name: '⚡ Performance Impact',
+        value: `Avg response: ${avgResponseTime}\n` +
+               `Speedup: ${stats.hitRate > 0 ? `~${Math.round(stats.hitRate * 100)}x faster` : 'N/A'}\n` +
+               `Status: ${stats.hitRate > 0.8 ? '🟢 Excellent' : stats.hitRate > 0.6 ? '🟡 Good' : '🔴 Poor'}`,
+        inline: false
+      }
+    )
+    .setFooter({ text: 'Cache persists across restarts • Shared between bot instances' })
+    .setTimestamp();
+  
+  await interaction.reply({ embeds: [embed] });
+}
+
+// ========================
+// /clearcache COMMAND
+// ========================
+
+async function handleClearCacheCommand(interaction) {
+  if (!interaction.memberPermissions.has('Administrator')) {
+    return interaction.reply({
+      content: '❌ You need Administrator permission to use this command.',
+      ephemeral: true,
+    });
+  }
+  
+  await interaction.deferReply({ ephemeral: true });
+  
+  try {
+    console.log('\n🗑️  ===== CACHE CLEAR INITIATED =====');
+    
+    const statsBefore = await voiceManager.cache.getStats();
+    console.log(`📊 Before clear:`);
+    console.log(`   - Size: ${statsBefore.size} items`);
+    console.log(`   - Hits: ${statsBefore.hits}`);
+    console.log(`   - Misses: ${statsBefore.misses}`);
+    console.log(`   - Sets: ${statsBefore.sets}`);
+    console.log(`   - Deletes: ${statsBefore.deletes}`);
+    
+    // Clear the cache
+    await voiceManager.cache.clear();
+    
+    // Wait a moment for Redis to process
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    const statsAfter = await voiceManager.cache.getStats();
+    console.log(`\n📊 After clear:`);
+    console.log(`   - Size: ${statsAfter.size} items`);
+    console.log(`   - Hits: ${statsAfter.hits}`);
+    console.log(`   - Misses: ${statsAfter.misses}`);
+    console.log(`   - Sets: ${statsAfter.sets}`);
+    console.log(`   - Deletes: ${statsAfter.deletes}`);
+    console.log('=====================================\n');
+    
+    const itemsCleared = statsBefore.size - statsAfter.size;
+    
+    await interaction.editReply({
+      content: `✅ Redis cache cleared!\n\n` +
+               `**Before:**\n` +
+               `├ Items: ${statsBefore.size}\n` +
+               `├ Hits: ${statsBefore.hits}\n` +
+               `└ Misses: ${statsBefore.misses}\n\n` +
+               `**After:**\n` +
+               `├ Items: ${statsAfter.size}\n` +
+               `├ Hits: ${statsAfter.hits}\n` +
+               `└ Misses: ${statsAfter.misses}\n\n` +
+               `🗑️ **Cleared:** ${itemsCleared} items\n\n` +
+               `⚠️ Cache will rebuild automatically as users are active in voice channels.`,
+    });
+  } catch (error) {
+    console.error('Clear cache error:', error);
+    await interaction.editReply({
+      content: '❌ Failed to clear cache. Check console for details.\n' +
+               `Error: ${error.message}`,
+    });
+  }
+}
+
+// ========================
+// ADMIN COMMANDS (Same as before)
 // ========================
 
 async function handleSetVipRoleCommand(interaction) {
@@ -342,10 +610,6 @@ async function handleSetVipRoleCommand(interaction) {
   });
 }
 
-// ========================
-// /setboosterrole COMMAND
-// ========================
-
 async function handleSetBoosterRoleCommand(interaction) {
   if (!interaction.memberPermissions.has('Administrator')) {
     return interaction.reply({
@@ -368,10 +632,6 @@ async function handleSetBoosterRoleCommand(interaction) {
   });
 }
 
-// ========================
-// /setmultiplier COMMAND
-// ========================
-
 async function handleSetMultiplierCommand(interaction) {
   if (!interaction.memberPermissions.has('Administrator')) {
     return interaction.reply({
@@ -393,10 +653,6 @@ async function handleSetMultiplierCommand(interaction) {
     ephemeral: true,
   });
 }
-
-// ========================
-// /addbonuschannel COMMAND
-// ========================
 
 async function handleAddBonusChannelCommand(interaction) {
   if (!interaction.memberPermissions.has('Administrator')) {
@@ -423,10 +679,6 @@ async function handleAddBonusChannelCommand(interaction) {
   });
 }
 
-// ========================
-// /setlevelmessage COMMAND
-// ========================
-
 async function handleSetLevelMessageCommand(interaction) {
   if (!interaction.memberPermissions.has('Administrator')) {
     return interaction.reply({
@@ -448,10 +700,6 @@ async function handleSetLevelMessageCommand(interaction) {
     ephemeral: true,
   });
 }
-
-// ========================
-// /serverconfig COMMAND
-// ========================
 
 async function handleServerConfigCommand(interaction) {
   if (!interaction.memberPermissions.has('Administrator')) {
@@ -505,16 +753,16 @@ async function handleServerConfigCommand(interaction) {
 // ========================
 
 client.once('ready', async () => {
-  console.log('===================================');
+  console.log('\n=====================================');
   console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log('===================================');
+  console.log('=====================================\n');
   
   // Connect to YOUR Mongoose database
   try {
     await mongoose.connect(process.env.MONGODB_URI, {
       dbName: 'your_bot_database',  // Your main database
     });
-    console.log('✅ Mongoose connected (custom schemas)');
+    console.log('✅ Mongoose connected (custom schemas database)');
   } catch (error) {
     console.error('❌ Mongoose connection error:', error);
     process.exit(1);
@@ -523,7 +771,8 @@ client.once('ready', async () => {
   // Initialize voice manager (uses separate database)
   try {
     await voiceManager.init();
-    console.log('✅ Voice Manager initialized (voice data)');
+    console.log('✅ Voice Manager initialized (voice tracking database)');
+    console.log('✅ Redis cache enabled and connected!');
   } catch (error) {
     console.error('❌ Failed to initialize Voice Manager:', error);
     process.exit(1);
@@ -537,10 +786,16 @@ client.once('ready', async () => {
   } catch (error) {
     console.error('❌ Failed to register commands:', error);
   }
+  console.log('\n=====================================');
+  console.log('🎙️  Bot ready with Redis Cache!');
+  console.log('📊 Database Architecture:');
+  console.log('   - your_bot_database: Guild settings');
+  console.log('   - voicetracker: Voice tracking data');
+  console.log('   - Redis: Persistent cache storage');
+  console.log('=====================================\n');
   
-  console.log('===================================');
-  console.log('🎙️ Bot ready with MongoDB + Custom Schemas!');
-  console.log('===================================');
+  // Start cache monitoring
+  startCacheMonitoring();
 });
 
 // ========================
@@ -556,10 +811,46 @@ process.on('unhandledRejection', (error) => {
 });
 
 process.on('SIGINT', async () => {
-  console.log('\n⏹️ Shutting down...');
-  await voiceManager.destroy();
-  await mongoose.connection.close();
-  client.destroy();
+  console.log('\n⏹️  Shutting down...');
+  
+  // Stop the stats interval first
+  if (cacheStatsInterval) {
+    clearInterval(cacheStatsInterval);
+  }
+  
+  // Get stats BEFORE closing anything, but only if connected
+  try {
+    if (voiceManager.cache && voiceManager.cache.connected) {
+      const stats = await voiceManager.cache.getStats();
+      console.log('\n📊 Final Redis Cache Statistics:');
+      console.log(`   Hit Rate: ${(stats.hitRate * 100).toFixed(2)}%`);
+      console.log(`   Total Hits: ${stats.hits}`);
+      console.log(`   Total Misses: ${stats.misses}`);
+      console.log(`   Cache Size: ${stats.size} items\n`);
+    }
+  } catch (error) {
+    // Ignore stats errors during shutdown
+    console.log('📊 Cache stats unavailable during shutdown\n');
+  }
+  
+  // Close everything gracefully
+  try {
+    await voiceManager.destroy();
+  } catch (error) {
+    console.error('Error destroying voice manager:', error.message);
+  }
+  
+  try {
+    await mongoose.connection.close();
+  } catch (error) {
+    console.error('Error closing mongoose:', error.message);
+  }
+  
+  client.destroy().catch(error => {
+    console.error('Error destroying client:', error.message);
+  }); 
+  
+  console.log('✅ Shutdown complete');
   process.exit(0);
 });
 

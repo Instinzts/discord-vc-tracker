@@ -60,6 +60,12 @@ export class Channel extends EventEmitter {
     this.lastActivity = new Date();
     
     await this.user.save();
+
+      
+    // ✅ WRITE-THROUGH: Update user cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.user.data);
+    }
     
     this.emit('channelTimeAdd', this, amount);
   }
@@ -75,6 +81,11 @@ export class Channel extends EventEmitter {
     this.user.totalSessions++;
     await this.user.save();
     
+    // ✅ WRITE-THROUGH: Update user cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.user.data);
+    }
+
     this.emit('channelSessionIncrement', this);
   }
 
@@ -86,6 +97,11 @@ export class Channel extends EventEmitter {
     this.sessions = 0;
     
     await this.user.save();
+
+    // ✅ WRITE-THROUGH: Update user cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.user.data);
+    }
     
     this.emit('channelReset', this);
   }
@@ -96,6 +112,11 @@ export class Channel extends EventEmitter {
   async delete(): Promise<void> {
     this.user.channels.delete(this.channelId);
     await this.user.save();
+
+    // ✅ WRITE-THROUGH: Update user cache
+    if (this.manager.cache) {
+      await this.manager.cache.setUser(this.user.data);
+    }
     
     this.emit('channelDelete', this);
   }

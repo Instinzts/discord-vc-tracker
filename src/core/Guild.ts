@@ -83,6 +83,11 @@ export class Guild extends EventEmitter {
    */
   async save(): Promise<void> {
     await this.manager.storage.saveGuild(this.data);
+
+    // ✅ WRITE-THROUGH: Update cache with fresh data
+    if (this.manager.cache) {
+      await this.manager.cache.setGuild(this.data);
+    }
   }
 
   /**

@@ -8,6 +8,7 @@ export { Config } from './core/Config';
 // Export storage adapters
 export { JSONStorage } from './storage/JSONStorage';
 export { MongoStorage } from './storage/MongoStorage';
+export { SQLiteStorage } from './storage/SQLiteStorage';
 
 // Export utilities
 export { XPCalculator } from './utils/Calculator';
